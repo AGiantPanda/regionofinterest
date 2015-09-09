@@ -20,6 +20,7 @@ public:
 	int y;//代表第几行
 };
 
+//画线算法，在(x0, y0)和(x1, y1)之间画一条线并将线上的点填充成白色
 void DrawLine(cimg_library::CImg<unsigned char>& mask, int x0, int y0, int x1, int y1){
 	int dx = x1 - x0;
 	int dy = y1 - y0;
@@ -85,6 +86,7 @@ bool JudgePoint(MYPOINT p, std::vector<MYPOINT> Points)
 		return false;
 }
 
+//another
 bool JudgePoint2(MYPOINT p, std::vector<MYPOINT> Points)
 {
 	if (Points.size() < 3)
@@ -122,6 +124,7 @@ bool JudgePoint2(MYPOINT p, std::vector<MYPOINT> Points)
 	return false;
 }
 
+//区域蒙版，为选定的区域做一个二值图像的蒙版，方便以后的计算
 cimg_library::CImg<unsigned char> AreaMask(cimg_library::CImg<unsigned char> origin, std::vector<MYPOINT> Points){
 	int i, j, x0 = origin.width(), y0 = origin.height(), x1 = 0, y1 = 0;
 	cimg_library::CImg<unsigned char> mask(origin.width(), origin.height(), 1, 1);
@@ -132,7 +135,7 @@ cimg_library::CImg<unsigned char> AreaMask(cimg_library::CImg<unsigned char> ori
 	}
 	//draw the mask
 	//find a point in the circle
-	//缩小计算范围
+	//缩小计算范围，找到能框住选定区域的方框，再从方框中部开始搜索在图像内部的点
 	for (std::vector<MYPOINT>::iterator it = Points.begin(); it != Points.end(); it++){
 		x0 = x0 < (*it).x ? x0 : (*it).x;
 		y0 = y0 < (*it).y ? y0 : (*it).y;
@@ -143,7 +146,7 @@ cimg_library::CImg<unsigned char> AreaMask(cimg_library::CImg<unsigned char> ori
 	//while (!JudgePoint(p, Points) && p.y <= y1){
 	//	p.x = (p.x + 1) % (x1 + 1) + x0;
 	//	if (p.x == x0) p.y++;
-	//}
+	//}//cant use this function cause it takes too much computation
 	int c = 0, tmp_x = Points[0].x, tmp_y = Points[0].y;
 	while (p.y <= y1){
 		if (mask.atXY(p.x, p.y) == 255) {
