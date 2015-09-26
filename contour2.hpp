@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <iostream>
 #include <math.h>
+#include <time.h>
 #include <list>
 #include "CImg.h"
 
@@ -16,7 +17,66 @@ namespace roi{
 		Point(int xx, int yy) :x(xx), y(yy){}
 		int x;//代表第几列
 		int y;//代表第几行
+		Point operator + (const Point &p) const
+		{
+			return Point(x + p.x, y + p.y);
+		}
+		Point operator - (const Point &p) const
+		{
+			return Point(x - p.x, y - p.y);
+		}
 	};
+
+	//二值图像的膨胀运算
+	void dilation(unsigned char *origin, int width, int height, std::vector<Point> model, int times = 1)
+	{
+		Point _p;
+		unsigned char *temp = new unsigned char[width*height];
+		memcpy(temp, origin, width*height);
+		for (times; times > 0; times--){
+			for (int i = 0; i < height; i++){
+				for (int j = 0; j < width; j++){
+					if (temp[i*width + j] == 255){
+						for (std::vector<Point>::iterator p = model.begin(); p != model.end(); p++){
+							_p.x = (*p).x + j;
+							_p.y = (*p).y + i;
+							if (_p.x >= 0 && _p.x < width && _p.y >= 0 && _p.y < height){
+								origin[_p.y * width + _p.x] = 255;
+							}
+						}
+					}
+				}
+			}
+		}
+		delete[]temp;
+	}
+
+	//二值图像的腐蚀运算
+	void erosion(unsigned char *origin, int width, int height, std::vector<Point> model, int times = 1)
+	{
+		Point _p;
+		unsigned char *temp = new unsigned char[width*height];
+		memcpy(temp, origin, width*height);
+		for (times; times > 0; times--){
+			for (int i = 0; i < height; i++){
+				for (int j = 0; j < width; j++){
+					if (temp[i*width + j] == 255){
+						for (std::vector<Point>::iterator p = model.begin(); p != model.end(); p++){
+							_p.x = (*p).x + j;
+							_p.y = (*p).y + i;
+							if (_p.x >= 0 && _p.x < width && _p.y >= 0 && _p.y < height){
+								if (temp[_p.y * width + _p.x] == 0){
+									origin[i * width + j] = 0;
+									break;
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		delete[]temp;
+	}
 
 	template<typename T>
 	bool is_inPolygon(T x, T y, std::vector<Point> points)
@@ -191,9 +251,9 @@ namespace roi{
 	int otsu(cimg_library::CImg<unsigned char> origin, std::vector<Point> points, cimg_library::CImg<unsigned char> &mask, int &threscmp){
 		int thresholdValue = 1;
 		int ihist[256] = { 0 };
-		int otsu_time = GetTickCount();
+		int otsu_time = clock();
 
-		int i, j, k;
+		int k;
 		int width = origin.width(), height = origin.height();
 		int n, n1, n2, gmin = 255, gmax = 0;
 		double m1, m2, sum, csum, fmax, sb;
@@ -301,7 +361,121 @@ namespace roi{
 			<< "thresholdCmpValue = " << threscmp << std::endl
 			<< "gmin = " << gmin << std::endl
 			<< "gmax = " << gmax << std::endl
-			<< "otsu time = " << GetTickCount() - otsu_time << std::endl;
+			<< "otsu time = " << clock() - otsu_time << std::endl;
+
+		return thresholdValue;
+	}//pass
+
+	/**
+	otsu, return the computed threshold in a specific area
+	目前只能对灰度图做二值分割
+	parameter:
+	@origin		--original pic
+	@points		--ROI, 给定连续的点，按顺序连城线以确定一个封闭的环
+	@debug		--debug option, 0 means no information outputed
+	*/
+	template<typename T>
+	int otsu(const T *origin, int width, int height, std::vector<Point> points, unsigned char *mask, int &threscmp){
+		int thresholdValue = 1;
+		int ihist[256] = { 0 };
+		int otsu_time = clock();
+
+		int k;
+		int n, n1, n2, gmin = 255, gmax = 0;
+		double m1, m2, sum, csum, fmax, sb;
+		int x0 = width, y0 = height, x1 = 0, y1 = 0;
+		//缩小计算范围
+		for (std::vector<Point>::iterator it = points.begin(); it != points.end(); it++){
+			x0 = x0 < (*it).x ? x0 : (*it).x;
+			y0 = y0 < (*it).y ? y0 : (*it).y;
+			x1 = x1 > (*it).x ? x1 : (*it).x;
+			y1 = y1 > (*it).y ? y1 : (*it).y;
+		}
+
+		std::vector<std::vector<float>> scanline(height);//the cross points in line x;
+		std::vector<Point>::iterator second = points.begin();
+		std::vector<Point>::iterator first = --points.end();
+
+		//generate the cross points
+		for (second; second != points.end(); first = second++){
+			if ((*second).y == (*first).y){
+				scanline[(*first).y].push_back(float((*first).x));
+			}
+			else{
+				//compute the line
+				float k = float((*second).x - (*first).x) / float((*second).y - (*first).y);
+				float b = float((*second).x) - k * float((*second).y);
+
+				int del_y = (*first).y;
+				while (del_y != (*second).y){
+					float cross_point = float(del_y) * k + b;
+					scanline[del_y].push_back(cross_point);
+					if ((*second).y > (*first).y)
+						del_y++;
+					else if ((*second).y < (*first).y)
+						del_y--;
+				}
+			}
+		}
+
+		//draw the mask & get the value
+		int count = 0;
+		for (std::vector<std::vector<float>>::size_type l = 0; l < scanline.size(); l++){
+			if (scanline[l].size() > 1){
+				sort(scanline[l].begin(), scanline[l].end());
+				for (std::vector<std::vector<float>>::size_type it = 0; it + 1 < scanline[l].size(); it++){
+					//判断线段scanline[l][it]--scanline[l][it+1]是否在多边形内部
+					//由于先后两个端点在多边形上，只要计算两个点的中点是否在多边形内部即可
+					if (is_inPolygon<float>((scanline[l][it] + scanline[l][it + 1]) / 2, float(l), points)) {
+						count = count + 2;
+						threscmp += origin[l * width + int(scanline[l][it] + 0.5)] + origin[l * width + int(scanline[l][it + 1] + 0.5)];
+						for (float x = scanline[l][it]; x < scanline[l][it + 1]; x++){
+							int value = origin[l * width + int(x + 0.5)];
+							mask[l * width + int(x + 0.5)] = 255;
+							ihist[value]++;
+							if (value > gmax)gmax = value;
+							if (value < gmin)gmin = value;
+						}
+					}
+				}
+			}
+		}
+		threscmp /= count;
+
+		sum = csum = 0.0;
+		n = 0;
+		for (k = 0; k < 256; k++){
+			sum += (double)k*(double)ihist[k];
+			n += ihist[k];
+		}
+
+		if (!n){
+			std::cout << "NOT NORMAL!!!" << std::endl << " thresholdValue = 160\n" << std::endl;
+			return 160;
+		}
+
+		//do the otsu global thresholding method
+		fmax = -1.0;
+		n1 = 0;
+		for (k = 0; k < 255; k++){
+			n1 += ihist[k];
+			if (!n1) continue;
+			n2 = n - n1;
+			if (n2 == 0) break;
+			csum += (double)k*ihist[k];
+			m1 = csum / n1;
+			m2 = (sum - csum) / n2;
+			sb = (double)n1*(double)n2*(m1 - m2)*(m1 - m2);
+			if (sb>fmax){
+				fmax = sb;
+				thresholdValue = k;
+			}
+		}
+		std::cout << "#OTSU: thresholdValue = " << thresholdValue << std::endl
+			<< "thresholdCmpValue = " << threscmp << std::endl
+			<< "gmin = " << gmin << std::endl
+			<< "gmax = " << gmax << std::endl
+			<< "otsu time = " << clock() - otsu_time << std::endl;
 
 		return thresholdValue;
 	}//pass
@@ -548,27 +722,52 @@ namespace roi{
 	}//pass
 
 	//找最大的团并返回外轮廓
-	std::vector<Point> FindBiggestContour(cimg_library::CImg<unsigned char> origin, std::vector<Point> Points)
+	template<typename T>
+	std::vector<Point> FindBiggestContour(cimg_library::CImg<T> origin, std::vector<Point> Points)
 	{
+		//如果要对多通道以及其它数据类型的图像进行处理，那么需要将其转换为单通道的图即可
+		std::cout << "-----------begin--------------" << std::endl;
 		std::vector<Point> contour;
 		if (Points.size() < 3){
 			std::cout << "points too less" << std::endl;
+			std::cout << "------------end---------------" << std::endl;
 			return contour;
 		}
 		int width = origin.width(), height = origin.height();
-		int begin = GetTickCount();
-		cimg_library::CImg<unsigned char> mask(width, height, 1, 1, 0);
+		T *_origin = new T[width * height];
+		unsigned char *_mask = new unsigned char[width * height];
+		memset(_mask, 0, sizeof(unsigned char)* width * height);
+
+		if (origin.spectrum() == 1){
+			for (int i = 0; i < width * height; i++){
+				//也许需要强度映射
+				_origin[i] = origin[i];
+			}
+		}
+		else if(origin.spectrum() == 3){
+			//将RGB图转换为灰度图
+			cimg_library::CImg<T> temp = origin.get_RGBtoYCbCr().get_channel(0);
+			for (int i = 0; i < width * height; i++){
+				//也许需要强度映射
+				_origin[i] = temp[i];
+			}
+		}
+
+		int begin = clock();
+		//cimg_library::CImg<unsigned char> mask(width, height, 1, 1, 0);
 		//compute the binary img
 		int threscmp = 0;
-		int threshold = otsu(origin, Points, mask, threscmp);
+		int threshold = otsu<T>(_origin, width, height, Points, _mask, threscmp);
+		std::cout << "- get threshold time: " << clock() - begin << std::endl;
+		begin = clock();
 
 		unsigned char *bi_img = new unsigned char[width*height];
 		for (int i = 0; i < height; i++){
 			for (int j = 0; j < width; j++){
-				if (origin.atXY(j, i) >= threshold && mask.atXY(j, i) == 255){
+				if (_origin[i*width + j] >= threshold && _mask[i*width + j] == 255){
 					bi_img[i*width + j] = (threshold >= threscmp) ? 255 : 0;
 				}
-				else if (origin.atXY(j, i) <= threshold && mask.atXY(j, i) == 255){
+				else if (_origin[i*width + j] <= threshold && _mask[i*width + j] == 255){
 					bi_img[i*width + j] = (threshold >= threscmp) ? 0 : 255;
 				}
 				else{
@@ -576,8 +775,8 @@ namespace roi{
 				}
 			}
 		}
-		std::cout << "- generate bi pic time: " << GetTickCount() - begin << std::endl;
-		begin = GetTickCount();
+		std::cout << "- generate bi pic time: " << clock() - begin << std::endl;
+		begin = clock();
 		//done
 
 		//找团
@@ -590,6 +789,7 @@ namespace roi{
 		if (!NumberofRuns){
 			std::cout << "NOTHING FOUND!!!" << std::endl
 				<< "size of contour is: " << contour.size() << std::endl;
+			std::cout << "------------end---------------" << std::endl;
 			return contour;
 		}
 		replaceSameLabel(runLabels, equivalences);
@@ -617,15 +817,74 @@ namespace roi{
 			else
 				bi_img[i*width + j] = 0;
 		}
-		std::cout << "- find biggest run time: " << GetTickCount() - begin << std::endl;
-		begin = GetTickCount();
+		std::cout << "- find biggest run time: " << clock() - begin << std::endl;
+		begin = clock();
 
 		contour = get_contour(bi_img, width, height);
-		std::cout << "- get contour time: " << GetTickCount() - begin << std::endl;
-		begin = GetTickCount();
+		std::cout << "- get contour time: " << clock() - begin << std::endl;
+		begin = clock();
+		std::cout << "------------end---------------" << std::endl;
 
 		delete[]bi_img;
 		delete[]MassofRuns;
+		delete[]_mask;
+		delete[]_origin;
+		return contour;
+	}
+
+	//this returns a contour with smooth line
+	template<typename T>
+	std::vector<Point> FindBiggestContour(cimg_library::CImg<T> origin, std::vector<Point> points, 
+		int dil_time, int ero_time, 
+		std::vector<Point> model = { Point(-1, -1), Point(0, -1), Point(1, -1), 
+			                         Point(-1,  0), Point(0,  0), Point(1,  0), 
+									 Point(-1,  1), Point(0,  1), Point(1,  1) })
+	{
+		int width = origin.width(), height = origin.height();
+		std::vector<Point> contour = FindBiggestContour(origin, points);
+		unsigned char *contourImg = new unsigned char[width * height];
+		unsigned char *temp = new unsigned char[width * height];
+		
+		//dilation
+		int begin = clock();
+		Point p;
+		std::vector<Point>::size_type i = 0;
+		std::vector<Point>::size_type c = contour.size();
+		for (dil_time; dil_time != 0; dil_time--){
+			for (i = 0; i < c; i++){
+				for (std::vector<Point>::size_type k = 0; k < model.size(); k++){
+					p = model[k] + contour[i];
+					if (p.x >= 0 && p.x < width && p.y >= 0 && p.y < height){
+						contourImg[p.y * width + p.x] = 255;
+						temp[p.y * width + p.x] = 255;
+						contour.push_back(p);
+					}
+				}
+			}
+		}
+		std::cout << "  -dilation time: " << clock() - begin << std::endl;
+		begin = clock();
+		
+		//erosion
+		for (ero_time; ero_time != 0; ero_time--){
+			for (i = 0; i < contour.size(); i++){	
+				for (std::vector<Point>::size_type k = 0; k < model.size(); k++){
+					p = model[k] + contour[i];
+					if (p.x >= 0 && p.x < width && p.y >= 0 && p.y < height){
+						if (temp[p.y * width + p.x] == 0){
+							contourImg[contour[i].y * width + contour[i].x] = 0;
+							break;
+						}
+					}
+				}
+			}
+		}
+		std::cout << "  -erosion time: " << clock() - begin << std::endl;
+
+		contour.clear();
+		contour = get_contour(contourImg, width, height);
+		delete[]contourImg;
+		delete[]temp;
 		return contour;
 	}
 
